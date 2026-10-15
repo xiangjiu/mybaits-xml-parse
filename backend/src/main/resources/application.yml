@@ -1,0 +1,24 @@
+server:
+  port: 8080
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+spring:
+  application:
+    name: mybatis-xml-analyzer
+  jackson:
+    default-property-inclusion: non_null
+  task:
+    execution:
+      pool:
+        core-size: 2
+        max-size: 4
+        queue-capacity: 50
+      thread-name-prefix: analyze-
+
+logging:
+  level:
+    com.xiangjiu.mybatisrel: INFO
