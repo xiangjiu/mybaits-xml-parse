@@ -38,7 +38,8 @@ public class XmlScanner {
             if (listener != null) {
                 listener.onFile(processed, result.totalFiles, f.getName());
             }
-            List<MapperStatement> stmts = parser.parse(f);
+            ParsedMapperFile pmf = parser.parse(f);
+            List<MapperStatement> stmts = pmf.statements;
             if (!stmts.isEmpty()) {
                 result.mapperCount++;
             }
@@ -48,6 +49,7 @@ public class XmlScanner {
                 }
             }
             result.statements.addAll(stmts);
+            result.resultMaps.addAll(pmf.resultMaps);
             processed++;
         }
         if (listener != null) {
@@ -88,5 +90,6 @@ public class XmlScanner {
         public int mapperCount;
         public int parseFailCount;
         public final List<MapperStatement> statements = new ArrayList<>();
+        public final List<ResultMapInfo> resultMaps = new ArrayList<>();
     }
 }

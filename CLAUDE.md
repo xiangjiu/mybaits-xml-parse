@@ -59,5 +59,5 @@ cd frontend && npx tsc -b && npx vite build   # 类型检查 + 构建
 - [x] M2 JSqlParser 表名/JOIN/ON 提取 + 正则降级
 - [x] M3 SpringBoot REST + 异步任务 + 进度
 - [x] M4 ReactFlow 前端 ER 图 + 表列表 + 单表详情 + Mermaid 导出
-- [ ] M5 关联字段启发增强
-- [ ] M6 Druid 多方言兜底、resultMap association/collection 弱关联、性能优化
+- [x] M5 关联字段启发增强（ON 字段全量入节点 + SELECT/WHERE 字段发现）
+- [x] M6 Druid 多方言兜底 + resultMap association/collection 弱关联边

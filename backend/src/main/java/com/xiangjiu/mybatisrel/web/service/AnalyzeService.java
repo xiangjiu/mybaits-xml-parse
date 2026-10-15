@@ -50,7 +50,7 @@ public class AnalyzeService {
             log.info("analyze[{}] 扫描完成: files={}, mappers={}, statements={}",
                     analyzeId, scan.totalFiles, scan.mapperCount, scan.statements.size());
 
-            AnalyzeResult result = graphBuilder.build(scan.statements);
+            AnalyzeResult result = graphBuilder.build(scan.statements, scan.resultMaps);
             taskManager.finish(analyzeId, result);
         } catch (Exception e) {
             log.error("analyze[{}] 失败", analyzeId, e);

@@ -46,24 +46,24 @@ public class MapperXmlParser {
     }
 
     /**
-     * 解析一个文件。若不是 mapper.xml（根不是 mapper），返回空列表。
+     * 解析一个文件。若不是 mapper.xml（根不是 mapper），返回空结果。
      */
-    public List<MapperStatement> parse(File file) {
-        List<MapperStatement> result = new ArrayList<>();
+    public ParsedMapperFile parse(File file) {
+        ParsedMapperFile out = new ParsedMapperFile();
         Document doc;
         try {
             doc = docBuilder.parse(file);
         } catch (Exception e) {
             // 解析失败的文件跳过，不中断整体
-            return result;
+            return out;
         }
         Element root = doc.getDocumentElement();
         if (root == null || !"mapper".equalsIgnoreCase(root.getTagName())) {
-            return result;
+            return out;
         }
         String namespace = root.getAttribute("namespace");
         if (namespace == null || namespace.isEmpty()) {
-            return result;
+            return out;
         }
 
         // 收集 <sql id> 片段
@@ -97,10 +97,47 @@ public class MapperXmlParser {
                 ms.setFileName(file.getName());
                 ms.setRawXml(innerXml(el));
                 ms.setFlatSql(flattener.flatten(el));
-                result.add(ms);
+                out.statements.add(ms);
             }
         }
-        return result;
+
+        // 解析 <resultMap> 的 association / collection（用于推断弱关联）
+        NodeList rmNodes = root.getElementsByTagName("resultMap");
+        for (int i = 0; i < rmNodes.getLength(); i++) {
+            Element el = (Element) rmNodes.item(i);
+            String id = el.getAttribute("id");
+            if (id == null || id.isEmpty()) {
+                continue;
+            }
+            ResultMapInfo rm = new ResultMapInfo();
+            rm.namespace = namespace;
+            rm.id = id;
+            rm.fqn = namespace + "." + id;
+            collectAssociations(el, rm.associations, "association", namespace);
+            collectAssociations(el, rm.associations, "collection", namespace);
+            out.resultMaps.add(rm);
+        }
+
+        return out;
+    }
+
+    /** 收集某个标签名（association/collection）的直接与嵌套节点。 */
+    private void collectAssociations(Element parent, List<Association> sink, String tag, String namespace) {
+        NodeList nodes = parent.getElementsByTagName(tag);
+        for (int i = 0; i < nodes.getLength(); i++) {
+            Element el = (Element) nodes.item(i);
+            Association a = new Association();
+            a.kind = tag;
+            a.property = nullIfEmpty(el.getAttribute("property"));
+            a.column = nullIfEmpty(el.getAttribute("column"));
+            a.select = nullIfEmpty(el.getAttribute("select"));
+            a.resultMapRef = nullIfEmpty(el.getAttribute("resultMap"));
+            a.javaType = nullIfEmpty(el.getAttribute("javaType"));
+            if (a.javaType == null) {
+                a.javaType = nullIfEmpty(el.getAttribute("ofType"));
+            }
+            sink.add(a);
+        }
     }
 
     private String innerXml(Element el) {

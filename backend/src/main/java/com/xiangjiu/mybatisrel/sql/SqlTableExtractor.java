@@ -14,6 +14,11 @@ import net.sf.jsqlparser.statement.insert.Insert;
 import net.sf.jsqlparser.statement.select.*;
 import net.sf.jsqlparser.statement.update.Update;
 
+import com.alibaba.druid.DbType;
+import com.alibaba.druid.sql.SQLUtils;
+import com.alibaba.druid.sql.ast.SQLStatement;
+import com.alibaba.druid.sql.visitor.SchemaStatVisitor;
+
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,12 +28,15 @@ import java.util.regex.Pattern;
 
 /**
  * 用 JSqlParser 从一条 SQL 中提取表名、JOIN 类型与 ON 连接字段。
- * 解析失败时降级为正则，仅提取表名。
+ * 解析失败时按 Druid → 正则 三级降级。
  */
 public class SqlTableExtractor {
 
     private static final Pattern FROM_JOIN_TABLE =
             Pattern.compile("(?i)\\b(?:FROM|JOIN)\\s+([A-Za-z_][\\w]*(?:\\.[A-Za-z_][\\w]*)*)");
+
+    private static final String DRUID_DB = "mysql";
+    private static final DbType DRUID_DBTYPE = DbType.mysql;
 
     private final Map<String, String> aliasToTable = new LinkedHashMap<>();
 
@@ -42,7 +50,10 @@ public class SqlTableExtractor {
             stmt = CCJSqlParserUtil.parse(sql);
         } catch (Exception e) {
             result.parseFailed = true;
-            regexFallback(sql, result);
+            // JSqlParser 失败 → Druid 兜底 → 再正则
+            if (!druidFallback(sql, result)) {
+                regexFallback(sql, result);
+            }
             return result;
         }
         try {
@@ -55,13 +66,17 @@ public class SqlTableExtractor {
             } else if (stmt instanceof Insert) {
                 handleInsert((Insert) stmt, result);
             } else {
-                // 其它类型，降级正则提表名
-                regexFallback(sql, result);
+                // 其它类型，降级
+                if (!druidFallback(sql, result)) {
+                    regexFallback(sql, result);
+                }
             }
         } catch (Exception e) {
-            // 二次兜底：结构遍历失败也用正则
+            // 二次兜底：结构遍历失败也降级
             result.parseFailed = true;
-            regexFallback(sql, result);
+            if (!druidFallback(sql, result)) {
+                regexFallback(sql, result);
+            }
         }
         return result;
     }
@@ -72,6 +87,20 @@ public class SqlTableExtractor {
             PlainSelect ps = (PlainSelect) body;
             FromItem from = ps.getFromItem();
             String mainTable = registerFromItem(from, result);
+            if (result.mainTable == null && mainTable != null) {
+                result.mainTable = mainTable;
+            }
+            // 启发发现字段：从 SELECT 列与 WHERE 收集 Column
+            List<SelectItem> items = ps.getSelectItems();
+            if (items != null) {
+                for (SelectItem it : items) {
+                    if (it instanceof SelectExpressionItem) {
+                        collectColumns(((SelectExpressionItem) it).getExpression(), result, mainTable);
+                    }
+                }
+            }
+            collectColumns(ps.getWhere(), result, mainTable);
+
             // 子查询 from：已递归处理
             List<Join> joins = ps.getJoins();
             if (joins != null) {
@@ -94,7 +123,6 @@ public class SqlTableExtractor {
                     }
                 }
             }
-            // where 中子查询关联暂时不深挖（M6）
         } else if (body instanceof SetOperationList) {
             for (SelectBody sb : ((SetOperationList) body).getSelects()) {
                 handleSelectBody(sb, result, outerFromTable);
@@ -107,11 +135,32 @@ public class SqlTableExtractor {
         }
     }
 
+    /** 递归收集表达式中的 Column，归到其所属表（无表限定则归 defaultTable）。 */
+    private void collectColumns(Expression e, ExtractResult result, String defaultTable) {
+        if (e == null) return;
+        if (e instanceof Column) {
+            Column c = (Column) e;
+            String tbl = c.getTable() != null ? resolveAlias(c.getTable().getName()) : defaultTable;
+            result.addColumn(tbl, c.getColumnName());
+            return;
+        }
+        if (e instanceof net.sf.jsqlparser.expression.BinaryExpression) {
+            net.sf.jsqlparser.expression.BinaryExpression be =
+                    (net.sf.jsqlparser.expression.BinaryExpression) e;
+            collectColumns(be.getLeftExpression(), result, defaultTable);
+            collectColumns(be.getRightExpression(), result, defaultTable);
+        }
+        // 函数、子查询等不深挖
+    }
+
     // ---- UPDATE ----
     private void handleUpdate(Update upd, ExtractResult result) {
         Table t = upd.getTable();
         if (t != null) {
             registerTable(t, result);
+            if (result.mainTable == null) {
+                result.mainTable = shortName(t);
+            }
         }
         // 4.7 的 Update 可能有 fromItems / joins
         try {
@@ -134,6 +183,9 @@ public class SqlTableExtractor {
         Table t = del.getTable();
         if (t != null) {
             registerTable(t, result);
+            if (result.mainTable == null) {
+                result.mainTable = shortName(t);
+            }
         }
         try {
             List<Join> joins = del.getJoins();
@@ -154,6 +206,9 @@ public class SqlTableExtractor {
         Table t = ins.getTable();
         if (t != null) {
             registerTable(t, result);
+            if (result.mainTable == null) {
+                result.mainTable = shortName(t);
+            }
         }
         Select select = ins.getSelect();
         if (select != null) {
@@ -297,6 +352,33 @@ public class SqlTableExtractor {
 
     private String shortName(Table t) {
         return shortName(t.getName());
+    }
+
+    // ---- Druid 兜底：多方言解析失败时提取表名 ----
+    private boolean druidFallback(String sql, ExtractResult result) {
+        try {
+            List<SQLStatement> stmts = SQLUtils.parseStatements(sql, DRUID_DB);
+            if (stmts == null || stmts.isEmpty()) {
+                return false;
+            }
+            SchemaStatVisitor visitor = SQLUtils.createSchemaStatVisitor(DRUID_DBTYPE);
+            for (SQLStatement s : stmts) {
+                s.accept(visitor);
+            }
+            boolean found = false;
+            for (Object key : visitor.getTables().keySet()) {
+                String tbl = key.toString();
+                // key 形如 TableStat.Name，toString 通常是表名；保险起见取最后一段
+                String sn = shortName(tbl);
+                if (sn != null && !sn.isEmpty()) {
+                    result.tables.add(sn);
+                    found = true;
+                }
+            }
+            return found;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     // ---- 正则兜底 ----

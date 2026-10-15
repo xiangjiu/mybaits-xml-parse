@@ -290,12 +290,12 @@ erDiagram
 
 ## 9. 实施里程碑（后续编码阶段参考）
 
-1. **M1 XML 扫描 + 动态 SQL 拼接**：能输出每个 mapper 的代表性 SQL 文本（控制台打印）。最小可用。
-2. **M2 JSqlParser 表名/JOIN 提取**：产出 `AnalyzeResult` JSON，单测覆盖含子查询/动态 SQL 的样例。
-3. **M3 SpringBoot REST + 异步任务**：`/api/analyze`、`/progress`、`/result` 可用。
-4. **M4 ReactFlow 前端可视化**：ER 图渲染 + dagre 布局 + 表搜索。
-5. **M5 单表详情 + 导出**：Mermaid/PNG 导出、单表 SQL 溯源。
-6. **M6 鲁棒性**：Druid/正则降级、错误隔离、大项目性能优化。
+1. **M1 XML 扫描 + 动态 SQL 拼接** ✅：递归扫描 + `<if>/<where>/<set>/<choose>/<foreach>/<include>` 展平 + `#{}/${}` 占位归一。
+2. **M2 JSqlParser 表名/JOIN/ON 提取** ✅：`PlainSelect.getJoins()`、ON 等值连接字段、子查询递归；别名→真实表映射；无向合并。
+3. **M3 SpringBoot REST + 异步任务** ✅：`/api/analyze`、`/progress`、`/result`、`/table`、`/export`。
+4. **M4 ReactFlow 前端可视化** ✅：dagre 自动布局 + 表卡片节点 + 表列表 + 单表详情 + Mermaid 导出。
+5. **M5 关联字段启发增强** ✅：所有 ON 字段对入边并入两端表节点；从 SELECT 列与 WHERE 等值条件发现字段填充 TableNode.fields。
+6. **M6 鲁棒性** ✅：JSqlParser → Druid（多方言）→ 正则 三级降级；`<resultMap>` 的 association/collection 经 `select`/`resultMap` 引用推断 WEAK 弱关联边（与 STRONG 合并，强关联优先）。
 
 ---
 
